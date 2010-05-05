@@ -1,0 +1,23 @@
+.abbrev-settings {
+}
+
+.abbrev-settings input[type="text"] {
+    display: block;
+    margin-left: 6em;
+}
+
+fieldset#setDelete div {
+    margin-top: -1em;
+    margin-bottom: -1em;
+}
+fieldset#setDelete input[type="checkbox"] {
+    line-height: 90%;
+}
+fieldset#setDelete label {
+    position: absolute;
+    margin-left: 2em;
+}
+
+abbr, acronym {
+    cursor: help;
+}

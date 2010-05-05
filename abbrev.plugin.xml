@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<pluggable type="plugin">
+  <name>Abbrev</name>
+  <license url="http://www.apache.org/licenses/LICENSE-2.0.html">Apache Software License 2.0</license>
+  <url>http://habariproject.org/</url>
+  <author url="http://Ken.Coar.Org/">Ken Coar</author>
+  <version>0.1alpha</version>
+  <description><![CDATA[Extensible abbreviations.]]></description>
+  <copyright>2009</copyright>
+  <help>
+    <value>
+      <![CDATA[
+        <p>
+          When this plugin is active, abbreviations in the text are marked up
+          so that a mouseover tooltip shows the definition.  Abbreviations
+          and their definitions are stored in the Habari database and
+          can be configured by the user.
+        </p>
+      ]]>
+    </value>
+  </help>
+</pluggable>

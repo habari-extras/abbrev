@@ -1,0 +1,4 @@
+#
+# Javascript files might be dynamically generated..
+#
+AddHandler application/x-httpd-php .js
