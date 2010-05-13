@@ -350,9 +350,32 @@ class Abbrev extends Plugin {
                    'abbrev');
     }
 
-    const MARKUP_MARKER_PRE =  '<!-- saved_markup -->';
+    const MARKUP_MARKER_PRE  = '<!-- saved_markup -->';
     const MARKUP_MARKER_POST = '<!-- /saved_markup -->';
-    const REDELIM = 'з';
+    const REDELIMS           = '#`~=%ез';
+
+    private static $REDELIMS;
+    private static $REDELIM;
+
+    private function chooseREdelim($text) {
+        if (! isset(Abbrev::$REDELIMS)) {
+            $d = preg_split('//', Abbrev::REDELIMS);
+            Abbrev::$REDELIMS = array_slice($d, 1, count($d) - 2);
+        }
+        $delim = null;
+        foreach (Abbrev::$REDELIMS as $tdelim) {
+            if (! strstr($tdelim, $text)) {
+                $delim = $tdelim;
+                break;
+            }
+        }
+        if (! isset($delim)) {
+            throw new Exception("Can't find an unused delimiter "
+                                . 'for regular expressions!');
+        }
+        return $delim;
+    }
+
 
     /*
      * Save away and index a piece of markup.  If the regex and text
@@ -370,11 +393,12 @@ class Abbrev extends Plugin {
         $a_saved[] = $save_text;
         $n = count($a_saved) - 1;
         if (isset($regex) && isset($text)) {
+            $redelim = $this->chooseREdelim($text);
             $rtext = sprintf('%s%d%s',
                              Abbrev::MARKUP_MARKER_PRE,
                              $n,
                              Abbrev::MARKUP_MARKER_POST);
-            $nregex = Abbrev::REDELIM . '\Q' . $minfo[0] . '\E' . Abbrev::REDELIM;
+            $nregex = $redelim . '\Q' . $minfo[0] . '\E' . $redelim;
             $msg = sprintf('<![CDATA[save=|%s| regex=|%s| nregex=|%s|]]>',
                            $save_text, $regex, $nregex);
             $text = preg_replace($nregex, $rtext, $text);
@@ -387,20 +411,22 @@ class Abbrev extends Plugin {
      * Restore any saved strings.
      */
     private function restore_markup(&$saved_markup, $text) {
+        $redelim = $this->chooseREdelim($text);
         foreach ($saved_markup as $idx => $string) {
             $old = sprintf('%s\Q%s%d%s\E%s',
-                           Abbrev::REDELIM,
+                           $redelim,
                            Abbrev::MARKUP_MARKER_PRE,
                            $idx,
                            Abbrev::MARKUP_MARKER_POST,
-                           Abbrev::REDELIM);
+                           $redelim);
             $text = preg_replace($old, $string, $text);
         }
         return $text;
     }
 
     private function sequester_abbrevs($content, &$saved_abbrevs) {
-        $regex = Abbrev::REDELIM . '(<abbr[^>]*>.*?</abbr>)' . Abbrev::REDELIM . 'siS';
+        $redelim = $this->chooseREdelim($content);
+        $regex = $redelim . '(<abbr[^>]*>.*?</abbr>)' . $redelim . 'siS';
         while (preg_match($regex, $content, $matched)) {
             $content = $this->save_markup($matched[1], $saved_abbrevs,
                                           $regex, $content);
@@ -413,6 +439,7 @@ class Abbrev extends Plugin {
      * changes to text inside tags!
      */
     public function filter_post_content_out($content, $post) {
+        $redelim = $this->chooseREdelim($content);
         /*
          * These should really be sorted longest-first so that a short
          * abbreviation doesn't break a longer one.
@@ -428,7 +455,7 @@ class Abbrev extends Plugin {
          * Likewise for any markup tags so we don't insert into the
          * middle of one.
          */
-        $regex = Abbrev::REDELIM . '(<[^!][^>]*>)' . Abbrev::REDELIM . 'siS';
+        $regex = $redelim . '(<[^!][^>]*>)' . $redelim . 'siS';
         while (preg_match($regex, $content, $matched)) {
             $content = $this->save_markup($matched[1], $saved_markup,
                                           $regex, $content);
@@ -462,11 +489,11 @@ class Abbrev extends Plugin {
                 }
             }
             $pattern = sprintf('%s(?<=%s)(\Q%s\E)(?=%s)%s%s',
-                               Abbrev::REDELIM,
+                               $redelim,
                                $abbrev->prefix,
                                $abbrev->abbrev,
                                $abbrev->postfix,
-                               Abbrev::REDELIM,
+                               $redelim,
                                $reflags);
             if (preg_match($pattern, $content, $matched)) {
                 $rtext = sprintf('<abbr title="%s">%s</abbr>',
