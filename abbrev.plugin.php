@@ -6,6 +6,14 @@ class Abbrev extends Plugin {
     const PLUGIN_TOKEN = 'Abbrev_token';
     const VERSION      = '0.1alpha';
 
+    private function qsafe($text, $addComma=false) {
+        $text = sprintf('"%s"', HTMLentities(addslashes($text)));
+        if ($addComma) {
+            $text .= ', ';
+        }
+        return $text;
+    }
+
     private function _getAbbrevs() {
         return DB::get_results('SELECT * FROM ' . DB::table('abbrev')
                                . ' ORDER BY priority ASC, '
@@ -35,10 +43,20 @@ class Abbrev extends Plugin {
                              'screen'),
                        'abbrev',
                        array('admin'));
+            Stack::add('template_header_javascript',
+                       $this->get_url() . '/abbrev.js',
+                       'abbrev');
             $abbrevs = $this->_getAbbrevs();
             if ($n = count($abbrevs)) {
                 $js_xid2def .= "\n  \$(document).ready(function(){\n"
-                    .   "    aDefs=[];\n";
+                    . "    function aDef(abbrev_p, definition_p, caseful_p, prefix_p, postfix_p) {\n"
+                    . "        this.abbrev = abbrev_p;\n"
+                    . "        this.definition = definition_p;\n"
+                    . "        this.caseful = caseful_p;\n"
+                    . "        this.prefix = prefix_p;\n"
+                    . "        this.postfix = postfix_p;\n"
+                    . "    }\n"
+                    . "    aDefs = [];\n";
                 foreach ($abbrevs as $abbrev) {
                     $prefix = "'" . $abbrev->prefix . "'";
                     $postfix = "'" . $abbrev->postfix . "'";
@@ -46,22 +64,23 @@ class Abbrev extends Plugin {
                     $prefix = str_replace('"', '\\"', $prefix);
                     $postfix = str_replace('\\', '\\\\', $postfix);
                     $postfix = str_replace('"', '\\"', $postfix);
-                    $js_xid2def .= '    aDefs[' . $abbrev->xid . '] = ['
+                    $js_xid2def .= '    aDefs[' . $abbrev->xid . '] = new aDef('
+                        . $this->qsafe($abbrev->abbrev, true)
+                        . $this->qsafe($abbrev->definition, true)
                         . ($abbrev->caseful ? 'true' : 'false') . ', '
-                        . HTMLentities($prefix) . ', '
-                        . HTMLentities($postfix) . ', '
-                        . '"' . HTMLentities($abbrev->definition) . "\"];\n";
+                        . $this->qsafe($prefix, true)
+                        . $this->qsafe($postfix) . ");\n";
                 }
                 $js_xid2def .= "    \$('#mAbbrev select')"
                     . ".change(function(){\n"
                     . "      aNum = \$(this).val();\n"
-                    . "      \$('#mDefinition input').val($('<input value=\"' + aDefs[aNum][3] + '\"/>').val());\n"
+                    . "      \$('#mDefinition input').val($('<input value=\"' + aDefs[aNum].definition + '\"/>').val());\n"
                     . "      \$('#mCaseful input[type=\"checkbox\"]')"
-                    . ".attr('checked', aDefs[aNum][0]);\n"
+                    . ".attr('checked', aDefs[aNum].caseful);\n"
                     . "      \$('#mPreRegex input[type=\"text\"]')"
-                    . ".val($('<input value=\"' + aDefs[aNum][1] + '\"/>').val());\n"
+                    . ".val($('<input value=\"' + aDefs[aNum].prefix + '\"/>').val());\n"
                     . "      \$('#mPostRegex input[type=\"text\"]')"
-                    . ".val($('<input value=\"' + aDefs[aNum][2] + '\"/>').val())});\n"
+                    . ".val($('<input value=\"' + aDefs[aNum].postfix + '\"/>').val())});\n"
                     . "  })\n";
                 Stack::add('admin_header_javascript',
                            $js_xid2def,
@@ -105,7 +124,7 @@ class Abbrev extends Plugin {
             . 'definition VARCHAR(255)'
             . ')';
         if (! DB::dbdelta($sql)) {
-//            Utils::debug(DB::get_errors());
+            Utils::debug(DB::get_errors());
         }
         if ($file == str_replace('\\', '/', $this->get_file())) {
             ACL::create_token(self::PLUGIN_TOKEN,
@@ -282,7 +301,6 @@ class Abbrev extends Plugin {
                              'definition' => $setAdd->nDefinition->value,
                              'prefix'     => $prefix,
                              'postfix'    => $postfix));
-//            Utils::debug(DB::get_errors());
         }
 
         /*
@@ -297,7 +315,6 @@ class Abbrev extends Plugin {
         $postfix = str_replace('\\', '\\\\', $postfix);
         $prefix = html_entity_decode($prefix);
         $postfix = html_entity_decode($postfix);
-//        Utils::debug(array($def, $prefix, $postfix, $abbrevById[$xid]));
         if ($def
             && (($def != $abbrevById[$xid]->definition)
                 || ($setMod->mCaseful->value != $abbrevById[$xid]->caseful)
@@ -309,7 +326,6 @@ class Abbrev extends Plugin {
                              'prefix' => $prefix,
                              'postfix' => $postfix),
                        array('xid' => $xid));
-//            Utils::debug(DB::get_errors());
         }
 
         /*
@@ -320,7 +336,6 @@ class Abbrev extends Plugin {
             if ($formctl->value) {
                 preg_match('/^abbrev_(\d+)$/', $id, $pieces);
                 DB::delete(DB::table('abbrev'), array('xid' => $pieces[1]));
-//                Utils::debug(DB::get_errors());
             }
         }
 
@@ -333,21 +348,62 @@ class Abbrev extends Plugin {
         Stack::add('template_stylesheet',
                    array($this->get_url() . '/abbrev.css', 'screen'),
                    'abbrev');
-        Stack::add('template_header_javascript',
-                   $this->get_url() . '/abbrev.js',
-                   'abbrev');
+    }
+
+    const MARKUP_MARKER_PRE =  '<!-- saved_markup -->';
+    const MARKUP_MARKER_POST = '<!-- /saved_markup -->';
+    const REDELIM = '§';
+
+    /*
+     * Save away and index a piece of markup.  If the regex and text
+     * arguments are specified, any group matched by the regex is used as
+     * a plugin to the text to be saved, and the regex is also used
+     * to find and replace the first occurrence in the text with
+     * the save marker.
+     */
+    private function save_markup($save_text, &$a_saved,
+                                 $regex=null, $text=null) {
+        if (isset($regex) && isset($text)) {
+            preg_match($regex, $text, $minfo);
+            $save_text = sprintf($save_text, $minfo[1]);
+        }
+        $a_saved[] = $save_text;
+        $n = count($a_saved) - 1;
+        if (isset($regex) && isset($text)) {
+            $rtext = sprintf('%s%d%s',
+                             Abbrev::MARKUP_MARKER_PRE,
+                             $n,
+                             Abbrev::MARKUP_MARKER_POST);
+            $nregex = Abbrev::REDELIM . '\Q' . $minfo[0] . '\E' . Abbrev::REDELIM;
+            $msg = sprintf('<![CDATA[save=|%s| regex=|%s| nregex=|%s|]]>',
+                           $save_text, $regex, $nregex);
+            $text = preg_replace($nregex, $rtext, $text);
+            return $text;
+        }
+        return $n;
+    }
+
+    /*
+     * Restore any saved strings.
+     */
+    private function restore_markup(&$saved_markup, $text) {
+        foreach ($saved_markup as $idx => $string) {
+            $old = sprintf('%s\Q%s%d%s\E%s',
+                           Abbrev::REDELIM,
+                           Abbrev::MARKUP_MARKER_PRE,
+                           $idx,
+                           Abbrev::MARKUP_MARKER_POST,
+                           Abbrev::REDELIM);
+            $text = preg_replace($old, $string, $text);
+        }
+        return $text;
     }
 
     private function sequester_abbrevs($content, &$saved_abbrevs) {
-        $redelim = chr(165);
-        $regex = $redelim . '(<abbr[^>]*>.*?</abbr>)' . $redelim . 'siS';
+        $regex = Abbrev::REDELIM . '(<abbr[^>]*>.*?</abbr>)' . Abbrev::REDELIM . 'siS';
         while (preg_match($regex, $content, $matched)) {
-            $saved_abbrevs[] = $matched[1];
-            $content = preg_replace('§\Q' . $matched[1] . '\E§s',
-                                    "<!-- SAVED_ABBREV -->"
-                                    . count($saved_abbrevs)
-                                    . "<!-- /SAVED_ABBREV -->",
-                                    $content);
+            $content = $this->save_markup($matched[1], $saved_abbrevs,
+                                          $regex, $content);
         }
         return $content;
     }
@@ -357,31 +413,25 @@ class Abbrev extends Plugin {
      * changes to text inside tags!
      */
     public function filter_post_content_out($content, $post) {
-        $redelim = chr(165);
         /*
          * These should really be sorted longest-first so that a short
          * abbreviation doesn't break a longer one.
          */
         $abbrevs = $this->_getAbbrevs();
         $content = " $content ";
-        $saved_abbrev = array();
         $saved_markup = array();
         /*
          * Excise any existing abbreviations so we don't double up.
          */
-        $content = $this->sequester_abbrevs($content, $saved_abbrevs);
+        $content = $this->sequester_abbrevs($content, $saved_markup);
         /*
          * Likewise for any markup tags so we don't insert into the
          * middle of one.
          */
-        $regex = $redelim . '(<[^!][^>]*>)' . $redelim . 'siS';
+        $regex = Abbrev::REDELIM . '(<[^!][^>]*>)' . Abbrev::REDELIM . 'siS';
         while (preg_match($regex, $content, $matched)) {
-            $saved_markup[] = $matched[1];
-            $content = preg_replace('§\Q' . $matched[1] . '\E§s',
-                                    "<!-- SAVED_MARKUP -->"
-                                    . count($saved_markup)
-                                    . "<!-- /SAVED_MARKUP -->",
-                                    $content);
+            $content = $this->save_markup($matched[1], $saved_markup,
+                                          $regex, $content);
         }
         foreach ($abbrevs as $abbrev) {
             /*
@@ -412,36 +462,23 @@ class Abbrev extends Plugin {
                 }
             }
             $pattern = sprintf('%s(?<=%s)(\Q%s\E)(?=%s)%s%s',
-                               $redelim,
+                               Abbrev::REDELIM,
                                $abbrev->prefix,
                                $abbrev->abbrev,
                                $abbrev->postfix,
-                               $redelim,
+                               Abbrev::REDELIM,
                                $reflags);
-            $content = preg_replace($pattern,
-                                   '<abbr title="'
-                                   . $abbrev->definition
-                                   . "\">$1</abbr>",
-                                   $content);
-            $content = $this->sequester_abbrevs($content, $saved_abbrev);
+            if (preg_match($pattern, $content, $matched)) {
+                $rtext = sprintf('<abbr title="%s">%s</abbr>',
+                                 $abbrev->definition, $matched[1]);
+                $content = $this->save_markup($rtext, $saved_markup,
+                                              $pattern, $content);
+            }
         }
         /*
          * Now restore any saved strings
          */
-        for ($i = 1; $i <= count($saved_abbrev); $i++) {
-            $regex = sprintf('%s<!-- SAVED_ABBREV -->%s<!-- /SAVED_ABBREV -->%ss',
-                             $redelim, $i, $redelim);
-            $content = preg_replace($regex,
-                                    $saved_abbrev[$i - 1],
-                                    $content);
-        }
-        for ($i = 1; $i <= count($saved_markup); $i++) {
-            $regex = sprintf('%s<!-- SAVED_MARKUP -->%s<!-- /SAVED_MARKUP -->%ss',
-                             $redelim, $i, $redelim);
-            $content = preg_replace($regex,
-                                    $saved_markup[$i - 1],
-                                    $content);
-        }
+        $content = $this->restore_markup($saved_markup, $content);
         $content = trim($content);
         return $content;
     }
